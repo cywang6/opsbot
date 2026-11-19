@@ -1,0 +1,205 @@
+#!/usr/bin/env python3
+# Copyright (c) 2026 Workflow Controller Contributors
+#
+# Licensed under the MIT License (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://opensource.org/licenses/MIT
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+"""E2E CLI shim：Workflow Controller 特性矩阵 e2e 的确定性 opencode CLI 替身。
+
+被 `playwright.matrix.config.ts` 的 webServer 前置到 PATH 后，所有
+`opencode` 子进程（worker / feedback 评估器）都由本脚本应答。不访问
+网络，不校验模型与密钥——矩阵用例与具体模型解耦。
+
+角色识别哨兵与 worker 场景表提炼在 `shim_common.py`（与 claude shim
+共享），本文件只自持 opencode 的参数面与 `run --format json` 事件流
+组装（与 `driver/opencode.py` 解析层对齐）：
+
+- 参数面：prompt 是位置参数（非 -p）；`--session` 恢复、`-m provider/model`
+  （裸模型名 driver 侧就跳过）、`--agent` 选择、`--standalone`/`--auto`
+  v2 旗标。driver 还会调两个子命令：`run --help`（`_detect_run_flags`
+  按 stdout 分词探测旗标面，须应答 v2 旗标集）与 `db path`
+  （`_resolve_opencode_db_path` 的 DB 定位，应答不存在的 XDG 惯例路径
+  即可——基线用例不依赖子代理/token 回读，定位回落 None 无害）。
+- 事件流：每行一个 JSON 对象，与 claude 的三段式 stream-json 本质差异是
+  tool_use 把 call 与 result 合并在同一 part.state（无孤立结果概念）；
+  step_finish 携带原生 tokens 形状 {input, output, cache:{write,read}}，
+  driver 归一成 Anthropic usage 形状（O1 用量断言锁的链路）。
+"""
+
+from __future__ import annotations
+
+import json
+import sys
+import uuid
+from pathlib import Path
+
+import shim_common as common
+
+# run 子命令里带值的旗标（其余 --flag 一律按无值处理；prompt 是唯一位置参数）。
+_VALUE_FLAGS = {"--format", "--session", "-m", "--agent", "--model", "--permission-mode"}
+
+HELP_TEXT = """\
+Usage: opencode run [options] <prompt>
+
+Options:
+  --format <format>   Output format (json)
+  --standalone        Start a private server for this run (v2)
+  --auto              Auto-approve actions not explicitly denied (v2)
+  --session <id>      Resume the given session
+  --agent <name>      Select the agent to use
+  -m <model>          Model in provider/model form
+"""
+
+# tool-loop 场景的固定工具调用 id（断言侧按此配对，跨回合稳定）。
+TOOL_OK_PART = "part_e2e_oc_ok_01"
+TOOL_FAIL_PART = "part_e2e_oc_fail_02"
+
+
+def _parse_run_args(argv: list[str]) -> tuple[str, str]:
+    """返回 (prompt, resume)。prompt = 唯一位置参数（`_build_args` 拼在末尾）。"""
+    prompt = resume = ""
+    i = 0
+    positionals: list[str] = []
+    while i < len(argv):
+        arg = argv[i]
+        if arg == "--help":
+            return "", ""
+        if arg.startswith("-"):
+            if arg in _VALUE_FLAGS and i + 1 < len(argv):
+                if arg == "--session":
+                    resume = argv[i + 1]
+                i += 1
+            i += 1
+            continue
+        positionals.append(arg)
+        i += 1
+    if positionals:
+        prompt = positionals[-1]
+    return prompt, resume
+
+
+def _native_usage(usage: dict) -> dict:
+    """Anthropic 形状（shim_common 场景读数）→ opencode 原生 tokens 形状。
+
+    usage-unknown 场景的非法读数原样透传（`input` 收到字符串即无效读数，
+    与真实 opencode 异常上报的失真形态一致）。
+    """
+    return {
+        "input": usage.get("input_tokens", 0),
+        "output": usage.get("output_tokens", 0),
+        "cache": {"write": 0, "read": 0},
+    }
+
+
+def _step_start(sid: str, msg: str) -> dict:
+    return {"type": "step_start", "sessionID": sid, "messageID": msg}
+
+
+def _text_line(sid: str, msg: str, part: str, text: str) -> dict:
+    return {"type": "text", "sessionID": sid, "messageID": msg,
+            "part": {"id": part, "text": text}}
+
+
+def _step_finish(sid: str, msg: str, part: str, usage: dict) -> dict:
+    return {"type": "step_finish", "sessionID": sid, "messageID": msg,
+            "part": {"id": part, "reason": "stop", "tokens": _native_usage(usage),
+                     "cost": 0}}
+
+
+def _tool_use_line(sid: str, msg: str, part: str, tool: str,
+                   tool_input: dict, output: str, *, error: bool) -> dict:
+    state: dict = {"input": tool_input, "output": output,
+                   "status": "error" if error else "completed"}
+    if error:
+        state["error"] = output
+    return {"type": "tool_use", "sessionID": sid, "messageID": msg,
+            "part": {"id": part, "tool": tool, "state": state}}
+
+
+def _tool_loop_lines(sid: str) -> list[dict]:
+    """tool-loop 场景（opencode 形态）：合并事件里的成功对 + 失败对。
+
+    工具名用 opencode 真实的小写类别名（bash/read）；call 与 result 在
+    同一 part.state（`state.status=error` 即失败对），没有孤立结果形态。
+    """
+    reply = "工具演练完成 [E2E:DONE]"
+    usage = {"input_tokens": 128, "output_tokens": 32}
+    msg = "msg_e2e_oc_tools"
+    return [
+        _step_start(sid, msg),
+        _text_line(sid, msg, "part_e2e_oc_intro", "先跑两个工具再收尾"),
+        _tool_use_line(sid, msg, TOOL_OK_PART, "bash",
+                       {"command": "echo workflow-controller-e2e-tool-ok"},
+                       "workflow-controller-e2e-tool-ok", error=False),
+        _tool_use_line(sid, msg, TOOL_FAIL_PART, "read",
+                       {"file_path": "/nonexistent/e2e-missing.txt"},
+                       "File not found: /nonexistent/e2e-missing.txt", error=True),
+        _text_line(sid, msg, "part_e2e_oc_outro", reply),
+        _step_finish(sid, msg, "part_e2e_oc_sf", usage),
+    ]
+
+
+def _emit(lines: list[dict]) -> None:
+    for line in lines:
+        print(json.dumps(line, ensure_ascii=False), flush=True)
+
+
+def main() -> int:
+    argv = sys.argv[1:]
+    if not argv:
+        return 1
+
+    if argv[0] == "db":
+        if len(argv) > 1 and argv[1] == "path":
+            xdg = Path.home() / ".local" / "share"
+            print(xdg / "opencode" / "opencode.db")
+            return 0
+        return 1
+    if argv[0] != "run":
+        return 1
+
+    prompt, resume = _parse_run_args(argv[1:])
+    if not prompt:
+        # `run --help`（旗标探测）：按 v2 旗标面应答，_detect_run_flags
+        # 对 stdout 分词取集，token 命中即生效。
+        print(HELP_TEXT)
+        return 0
+
+    sid = resume or ("ses_" + uuid.uuid4().hex[:16])
+    if common.EVALUATOR_SENTINEL in prompt:
+        reply, usage = common.evaluator_reply(prompt), {"input_tokens": 128, "output_tokens": 32}
+    elif common.HANDOFF_SENTINEL in prompt:
+        # opencode 跑道暂未覆盖 E4/MX-01 交接域（设计 §4.5），哨兵兜底
+        # 应答，防止误触场景时悬挂。
+        reply, usage = common.handoff_reply(prompt), {"input_tokens": 128, "output_tokens": 32}
+    elif common.CONTINUATION_MARKER in prompt:
+        reply, usage = common.continuation_reply(), {"input_tokens": 128, "output_tokens": 32}
+    else:
+        scenario_match = common.SCENARIO_RE.search(prompt)
+        if scenario_match and scenario_match.group(1) == "tool-loop":
+            # 一轮完成；场景标记只需被本轮看到（落盘 state.json 供探测分辨）。
+            common.record_scenario("tool-loop", 1)
+            _emit(_tool_loop_lines(sid))
+            return 0
+        reply, usage = common.worker_reply(prompt, session_id=sid, resumed=bool(resume))
+
+    msg = "msg_e2e"
+    _emit([
+        _step_start(sid, msg),
+        _text_line(sid, msg, "part_e2e_text", reply),
+        _step_finish(sid, msg, "part_e2e_sf", usage),
+    ])
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

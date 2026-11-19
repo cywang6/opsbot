@@ -1,0 +1,37 @@
+workflow: e2e-longrun
+description: E2E 长跑道 run（SD-12/RV-01/02/05、MX-02/03）—— worker 节点 graph-slow-write 场景前 10 轮每轮 2s 慢速推进，给 run 面成员级控制留出稳定交互窗口，之后照常 DONE 收敛
+max_parallel: 1
+work_dir: .
+agents_dir: ./agents
+nodes:
+  - id: init
+    task_type: bash
+    command: mkdir -p output && echo ok > output/init.txt
+    acceptance:
+      enabled: true
+      type: script
+      script: test -f output/init.txt
+    depends_on: []
+
+  - id: worker
+    task_type: agent
+    executor: e2e-worker
+    # 慢速回合 × 30 迭代预算：暂停/恢复/注入/停止/重启都能落在运行窗口内，
+    # 回合计数跨交互延续，最终轮写产物并 DONE 收敛。
+    max_iterations: 30
+    task_description: "[E2E-SCENARIO:graph-slow-write] [E2E:WRITE:output/worker.txt:attempt-] 按指令写入产物文件，完成后回复 DONE。"
+    task_goal: "写 output/worker.txt，完成后回复 DONE。"
+    acceptance:
+      enabled: true
+      type: script
+      script: test -f output/worker.txt
+    depends_on: [init]
+
+  - id: final
+    task_type: bash
+    command: echo done > output/final.txt
+    acceptance:
+      enabled: true
+      type: script
+      script: test -f output/final.txt
+    depends_on: [worker]

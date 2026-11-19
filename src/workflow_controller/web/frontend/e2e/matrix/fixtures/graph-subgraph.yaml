@@ -1,0 +1,40 @@
+workflow: e2e-subgraph
+description: E2E 子图与独立验收节点（MX-07）
+max_parallel: 1
+work_dir: .
+agents_dir: ./agents
+nodes:
+  - id: init
+    task_type: bash
+    command: mkdir -p output && echo ok > output/init.txt
+    acceptance:
+      enabled: true
+      type: script
+      script: test -f output/init.txt
+    depends_on: []
+
+  - id: gen-static
+    task_type: subgraph
+    file: ./e2e-subgraph.yaml
+    depends_on: [init]
+
+  - id: parent-worker
+    task_type: agent
+    executor: e2e-worker
+    task_description: "[E2E-SCENARIO:graph-write] [E2E:WRITE:output/parent.txt:parent-] 写入父图产物后回复 DONE。"
+    task_goal: "写 output/parent.txt，完成后回复 DONE。"
+    acceptance:
+      enabled: true
+      type: agent
+      verifier: e2e-verifier
+      verifier_prompt: "[E2E-SCENARIO:verify-pass] 检查 output/parent.txt，通过则最后一行只输出 PASS。"
+    depends_on: [gen-static]
+
+  - id: final
+    task_type: bash
+    command: cat output/sub-worker.txt output/parent.txt > output/final.txt
+    acceptance:
+      enabled: true
+      type: script
+      script: test -s output/final.txt
+    depends_on: [parent-worker]

@@ -1,0 +1,41 @@
+workflow: e2e-rollback
+description: E2E 回滚用例（E3）—— worker-a 验收连续失败耗尽重试预算后回滚到 init，第二代重跑通过
+max_parallel: 1
+rollback_budget: 1
+work_dir: .
+agents_dir: ./agents
+nodes:
+  - id: init
+    task_type: bash
+    command: mkdir -p output && echo ok > output/init.txt
+    acceptance:
+      enabled: true
+      type: script
+      script: test -f output/init.txt
+    depends_on: []
+
+  - id: worker-a
+    task_type: agent
+    executor: e2e-worker
+    # [E2E:WRITE:路径:内容前缀]：shim 按回合数写 attempt-N；
+    # 验收只认 attempt-3 —— 第 1、2 次尝试失败，重试耗尽触发回滚，
+    # 回滚后代数重跑时回合计数延续到 3，验收通过。
+    task_description: "[E2E-SCENARIO:graph-write] [E2E:WRITE:output/worker-a.txt:attempt-] 按指令写入产物文件，完成后回复 DONE。"
+    task_goal: "写 output/worker-a.txt，完成后回复 DONE。"
+    acceptance:
+      enabled: true
+      type: script
+      script: grep -q "attempt-3" output/worker-a.txt
+      max_retries: 1
+      on_exhaust: rollback
+      rollback_to: init
+    depends_on: [init]
+
+  - id: final
+    task_type: bash
+    command: echo done > output/final.txt
+    acceptance:
+      enabled: true
+      type: script
+      script: test -f output/final.txt
+    depends_on: [worker-a]
