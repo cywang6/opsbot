@@ -1,0 +1,28 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+dist/
+build/
+.venv/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+coverage.xml
+.import_linter_cache/
+
+# Node
+node_modules/
+
+# 工具与编辑器
+.DS_Store
+.idea/
+.vscode/
+
+# 运行时产物
+.workflow-controller/
+/workflow-controller.yaml
+/workflow-controller-config.yaml
+workflow-controller.db
