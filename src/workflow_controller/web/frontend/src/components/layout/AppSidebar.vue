@@ -35,7 +35,7 @@ const route = useRoute()
 const settingsModal = useSettingsModal()
 const toast = useToast()
 const { removeSession } = useSessions()
-const { authReady } = useAuth()
+const { authReady, authChecking } = useAuth()
 const { runs, refreshRuns } = useRuns()
 const { removeDir } = useRecentDirs()
 const { projectDir } = useProjectPaths()
@@ -203,6 +203,13 @@ function onSessionRowActivate(event: KeyboardEvent, id: string) {
 // 项目行「＋」：与行点击一致地持久化 project_dir（PUT /api/v1/config + SSE 回推），
 // 再打开新建会话弹窗，避免刷新后选中态回跳、或在 SSE config_update 回推前被覆盖。
 async function onNewSessionInProject(path: string) {
+  // 未配置模型供应商时引导到设置（authChecking 期间放行：尚未得知状态，
+  // 新建弹窗内自有 provider 下拉与启动按钮禁用兜底）。
+  if (!authChecking.value && !authReady.value) {
+    toast.warning('请先在设置中配置模型供应商')
+    settingsModal.open('模型供应商')
+    return
+  }
   await persistProjectDir(path)
   expandedProjects.value[normalizeDir(path)] = true
   requestNewSession()
@@ -241,7 +248,7 @@ async function onNewSessionInProject(path: string) {
           </svg>
           <span class="project-name">{{ basename(path) }}</span>
           <span class="project-actions">
-            <button class="project-new-session" :disabled="!authReady" title="新建会话" aria-label="新建会话" @click.stop="onNewSessionInProject(path)">＋</button>
+            <button class="project-new-session" title="新建会话" aria-label="新建会话" @click.stop="onNewSessionInProject(path)">＋</button>
             <button class="dir-delete-btn" title="移除" @click.stop="void removeDir(path)">×</button>
           </span>
         </div>

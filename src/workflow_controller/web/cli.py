@@ -19,6 +19,7 @@ from __future__ import annotations
 import contextlib
 import json
 import os
+import shutil
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -53,6 +54,11 @@ def _insight_command_cwd(command: str) -> Path | None:
         return command_parent.resolve()
     package_dir = command_parent.parent / command_path.name
     return package_dir.resolve() if package_dir.is_dir() else command_parent.parent.resolve()
+
+
+def _default_insight_command() -> str:
+    """context-insight 是主名；cannbot-insight 仅作为存量安装 fallback。"""
+    return "context-insight" if shutil.which("context-insight") else "cannbot-insight"
 
 
 def _find_free_port(start: int, host: str, tries: int = 10) -> int:
@@ -441,7 +447,7 @@ def run_web_command(
 
     insight_proc = None
     if insight:
-        insight_command = "cannbot-insight" if insight == "default" else insight
+        insight_command = _default_insight_command() if insight == "default" else insight
         insight_proc = _start_insight(insight_command, insight_port, no_open)
 
     def _kill_all() -> None:

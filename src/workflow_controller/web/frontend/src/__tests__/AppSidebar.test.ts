@@ -20,6 +20,9 @@ const mockConfig = ref<any>(null)
 const mockSessions = ref<any[]>([])
 const mockProjectDir = ref('')
 const mockAuthReady = ref(true)
+const mockAuthChecking = ref(false)
+const settingsOpenMock = vi.fn()
+const toastWarningMock = vi.fn()
 
 const routerPushMock = vi.fn()
 const routerReplaceMock = vi.fn()
@@ -30,7 +33,7 @@ vi.mock('vue-router', () => ({
 }))
 
 vi.mock('../composables/useSettingsModal', () => ({
-  useSettingsModal: () => ({ open: vi.fn() }),
+  useSettingsModal: () => ({ open: settingsOpenMock }),
 }))
 vi.mock('../composables/useRecentDirs', () => ({
   useRecentDirs: () => ({ addDir: vi.fn(), removeDir: vi.fn() }),
@@ -46,10 +49,10 @@ vi.mock('../composables/useSessions', () => ({
   useSessions: () => ({ removeSession: removeSessionMock }),
 }))
 vi.mock('../composables/useAuth', () => ({
-  useAuth: () => ({ authReady: mockAuthReady }),
+  useAuth: () => ({ authReady: mockAuthReady, authChecking: mockAuthChecking }),
 }))
 vi.mock('../composables/useToast', () => ({
-  useToast: () => ({ success: vi.fn(), error: vi.fn() }),
+  useToast: () => ({ success: vi.fn(), error: vi.fn(), warning: toastWarningMock }),
 }))
 
 async function mountSidebar() {
@@ -62,10 +65,13 @@ beforeEach(() => {
   mockSessions.value = []
   mockProjectDir.value = ''
   mockAuthReady.value = true
+  mockAuthChecking.value = false
   mockRoute.value = { name: 'dashboard', params: {} }
   routerPushMock.mockClear()
   routerReplaceMock.mockClear()
   removeSessionMock.mockReset()
+  settingsOpenMock.mockReset()
+  toastWarningMock.mockReset()
   removeSessionMock.mockResolvedValue({ ok: true })
   globalThis.fetch = vi.fn().mockResolvedValue({ ok: true })
 })
@@ -144,6 +150,71 @@ describe('AppSidebar 顶部添加项目入口', () => {
     } finally {
       wrapper.unmount()
       window.removeEventListener('workflow-controller:open-import', openImport)
+      window.removeEventListener('workflow-controller:open-new-session', openNewSession)
+    }
+  })
+})
+
+describe('AppSidebar 新建会话供应商引导', () => {
+  it('未配置模型供应商时，点击＋提示并直达设置，不打开新建会话', async () => {
+    mockConfig.value = { recent_dirs: ['/proj'] }
+    mockAuthReady.value = false
+    const openNewSession = vi.fn()
+    window.addEventListener('workflow-controller:open-new-session', openNewSession)
+    const wrapper = await mountSidebar()
+    try {
+      const button = wrapper.find('.project-new-session')
+      expect(button.exists()).toBe(true)
+      // 未配置供应商不再是死按钮：可点击
+      expect(button.attributes('disabled')).toBeUndefined()
+      await button.trigger('click')
+      await flushPromises()
+      expect(toastWarningMock).toHaveBeenCalledWith('请先在设置中配置模型供应商')
+      expect(settingsOpenMock).toHaveBeenCalledWith('模型供应商')
+      expect(openNewSession).not.toHaveBeenCalled()
+      // 引导短路：不持久化 project_dir（不发起 PUT /api/v1/config）
+      expect(globalThis.fetch).not.toHaveBeenCalled()
+    } finally {
+      wrapper.unmount()
+      window.removeEventListener('workflow-controller:open-new-session', openNewSession)
+    }
+  })
+
+  it('authChecking 期间（状态未知）放行打开新建会话', async () => {
+    mockConfig.value = { recent_dirs: ['/proj'] }
+    mockAuthReady.value = false
+    mockAuthChecking.value = true
+    const openNewSession = vi.fn()
+    window.addEventListener('workflow-controller:open-new-session', openNewSession)
+    const wrapper = await mountSidebar()
+    try {
+      const button = wrapper.find('.project-new-session')
+      await button.trigger('click')
+      await flushPromises()
+      expect(openNewSession).toHaveBeenCalledTimes(1)
+      expect(settingsOpenMock).not.toHaveBeenCalled()
+      expect(toastWarningMock).not.toHaveBeenCalled()
+    } finally {
+      wrapper.unmount()
+      window.removeEventListener('workflow-controller:open-new-session', openNewSession)
+    }
+  })
+
+  it('已配置模型供应商时点击＋正常打开新建会话', async () => {
+    mockConfig.value = { recent_dirs: ['/proj'] }
+    mockAuthReady.value = true
+    const openNewSession = vi.fn()
+    window.addEventListener('workflow-controller:open-new-session', openNewSession)
+    const wrapper = await mountSidebar()
+    try {
+      const button = wrapper.find('.project-new-session')
+      await button.trigger('click')
+      await flushPromises()
+      expect(openNewSession).toHaveBeenCalledTimes(1)
+      expect(settingsOpenMock).not.toHaveBeenCalled()
+      expect(toastWarningMock).not.toHaveBeenCalled()
+    } finally {
+      wrapper.unmount()
       window.removeEventListener('workflow-controller:open-new-session', openNewSession)
     }
   })

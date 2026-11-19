@@ -178,6 +178,15 @@ class Harness:
         assert ids, "成员尚未出生"
         return ids[0]
 
+    async def wait_member_context(self, run_id: str, context: str) -> None:
+        """等待成员出生且 context 落账：归属行先挂、分派方随后补记，慢机有窗口。"""
+
+        async def ready() -> bool:
+            sessions = await self.coord.list_run_sessions(run_id)
+            return any(s.context == context for s in sessions)
+
+        await self.eventually(ready)
+
 
 # ── 启动与查询 ────────────────────────────────────────────────────
 
@@ -242,6 +251,7 @@ class TestStartAndQuery:
         run_id = body["run_id"]
 
         await h.eventually(lambda: h.so.started)  # 成员出生
+        await h.wait_member_context(run_id, "node=a")  # context 补记完成后再取详情
         resp = await h.client.get(f"/api/v1/runs/{run_id}")
         assert resp.status_code == 200
         got = resp.json()

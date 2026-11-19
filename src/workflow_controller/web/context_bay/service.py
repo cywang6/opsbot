@@ -113,14 +113,14 @@ def resolve_cpx_session_path(session_id: str, env: dict[str, str] | None = None)
     if home:
         roots.extend(
             (
-                Path(home) / ".cannbot-insight" / "proxy",
                 Path(home) / ".context-insight" / "proxy",
+                Path(home) / ".cannbot-insight" / "proxy",
             )
         )
     roots.extend(
         (
-            Path.home() / ".cannbot-insight" / "proxy",
             Path.home() / ".context-insight" / "proxy",
+            Path.home() / ".cannbot-insight" / "proxy",
         )
     )
     seen: set[Path] = set()
@@ -135,18 +135,19 @@ def resolve_cpx_session_path(session_id: str, env: dict[str, str] | None = None)
     return None
 
 
-_CPX_CLAUDE_RUNTIMES = {"claude_sdk", "claude_code", "claude_cli"}
+_CPX_CAPTURE_RUNTIMES = {"claude_sdk", "claude_code", "claude_cli", "codex_cli"}
 
 
-def _is_cpx_wrapped_claude(context: dict[str, Any], runtime: str) -> bool:
-    """cpx 包装的 claude 系会话：转录源改读捕获文件而非原生目录。"""
-    return context.get("cli_wrapper") == "cpx" and runtime in _CPX_CLAUDE_RUNTIMES
+def _is_cpx_wrapped_session(context: dict[str, Any], runtime: str) -> bool:
+    """cpx 包装的会话：转录源改读捕获文件而非原生目录。"""
+    return context.get("cli_wrapper") == "cpx" and runtime in _CPX_CAPTURE_RUNTIMES
 
 
 def _locate_cpx_source(
     sdk_session_id: str,
     context: dict[str, Any],
     verb: str,
+    runtime: str,
 ) -> TranscriptSource | dict[str, Any]:
     """定位 cpx 捕获文件：失败返回错误响应 dict，成功返回 claude-jsonl 转录源。"""
     capture_path = resolve_cpx_session_path(
@@ -154,8 +155,13 @@ def _locate_cpx_source(
         context.get("env_overrides"),
     )
     if capture_path is None:
+        message = (
+            f"Codex cpx 捕获文件不存在（未回退原生 rollout）: {sdk_session_id}"
+            if runtime == "codex_cli"
+            else f"Claude Code session file not found: {sdk_session_id}"
+        )
         return {
-            "error": f"Claude Code session file not found: {sdk_session_id}",
+            "error": message,
             "ok": False,
         }
     if verb == "上传" and capture_path.suffix in {".gz", ".7z"}:
@@ -472,8 +478,8 @@ class ContextBayConsoleService:
         if runtime == "codex_cli" and verb == "上传":
             return {"error": f"runtime '{runtime}' 暂不支持 {verb}", "ok": False}
         cwd = context["cwd"] if default_cwd is None else (context["cwd"] or default_cwd)
-        if _is_cpx_wrapped_claude(context, runtime):
-            located = _locate_cpx_source(sdk_session_id, context, verb)
+        if _is_cpx_wrapped_session(context, runtime):
+            located = _locate_cpx_source(sdk_session_id, context, verb, runtime)
             if isinstance(located, dict):
                 return located
             return sdk_session_id, context["name"], cwd, located
