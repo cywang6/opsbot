@@ -152,7 +152,7 @@ banner "Building axcor wheels (kernel + plugins)"
 mkdir -p "$BUILD_DIR/wheels"
 for pkg in "${AXCOR_PACKAGES[@]}"; do
   info "building $pkg"
-  ( cd "$BUILD_DIR/axcor" && uv build --package "$pkg" --out-dir "$BUILD_DIR/wheels" ) \
+  ( cd "$BUILD_DIR/axcor" && uv build --package "$pkg" --wheel --out-dir "$BUILD_DIR/wheels" ) \
     || die "$pkg wheel 构建失败"
 done
 
@@ -162,7 +162,7 @@ banner "Building frontend"
 banner "Building workflow-controller wheel"
 mkdir -p "$DIST_DIR"
 ( cd "$PROJECT_DIR" && uv build --wheel --out-dir "$DIST_DIR" )
-WHEEL="$(ls "$DIST_DIR"/workflow_controller-"$VERSION"-*-py3-none-any.whl 2>/dev/null | head -1)"
+WHEEL="$(ls "$DIST_DIR"/workflow_controller-*-py3-none-any.whl 2>/dev/null | head -1)"
 [ -n "$WHEEL" ] || die "Wheel build failed — no matching .whl found in $DIST_DIR"
 info "wheel: $(basename "$WHEEL")"
 
@@ -186,18 +186,18 @@ command -v workflow-controller >/dev/null 2>&1 \
 workflow-controller --help >/dev/null 2>&1 || die "workflow-controller --help failed"
 info "workflow-controller works (v$VERSION)"
 
-TOOL_PY="$(uv tool dir)/envs/workflow-controller/bin/python"
+TOOL_PY="$(uv tool dir)/workflow-controller/bin/python"
 [ -x "$TOOL_PY" ] || { warn "tool env python 未找到，跳过 Web/Headless 启动验证"; exit 0; }
 
 info "web smoke: starting on port $WEB_SMOKE_PORT"
-( cd "$BUILD_DIR" && workflow-controller web \
+( cd "$BUILD_DIR" && exec workflow-controller web \
     --port "$WEB_SMOKE_PORT" --host 127.0.0.1 --no-open \
     --settings-dir "$BUILD_DIR/settings" >"$BUILD_DIR/web.log" 2>&1 ) &
 WEB_PID=$!
 WEB_OK=0
 for _ in $(seq 1 40); do
   sleep 1
-  if curl -sf "http://127.0.0.1:$WEB_SMOKE_PORT/api/v1/health" >/dev/null 2>&1; then
+  if curl -sf --noproxy '*' "http://127.0.0.1:$WEB_SMOKE_PORT/api/v1/health" >/dev/null 2>&1; then
     WEB_OK=1
     break
   fi

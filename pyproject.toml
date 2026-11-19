@@ -37,12 +37,16 @@ dependencies = [
     "workflow-controller-plugin-file-provenance>=0.1.0",
     "workflow-controller-plugin-graph>=0.1.0",
     "workflow-controller-plugin-staged-pipeline>=0.1.0",
-    "fastapi>=0.115",
+    "fastapi>=0.115,<0.137",
     "uvicorn[standard]>=0.32",
     "sse-starlette>=3.3",
 ]
 
-[project.optional-dependencies]
+[project.scripts]
+# 与 kernel 包同指一处：kernel-only 安装与完整包安装都提供 CLI
+workflow-controller = "workflow_controller.__main__:main"
+
+[dependency-groups]
 dev = [
     "import-linter>=2.13,<3",
     "pytest>=8.0",

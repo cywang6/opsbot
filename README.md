@@ -40,6 +40,7 @@ from pathlib import Path
 from workflow_controller.api.core_api import boot
 from workflow_controller.config.settings import AppConfig, HookServerConfig, ReviewerConfig
 
+
 async def main() -> None:
     workdir = Path("fake-demo").resolve()
     workdir.mkdir(exist_ok=True)
@@ -57,6 +58,7 @@ async def main() -> None:
         run = await api.run.get_run(run.run_id)
     print("run:", run.run_id, run.status)
     await orchestrator.shutdown()
+
 
 asyncio.run(main())
 ```
