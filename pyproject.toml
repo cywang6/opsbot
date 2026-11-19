@@ -1,0 +1,145 @@
+# Copyright (c) 2026 Workflow Controller Contributors
+#
+# Licensed under the MIT License (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://opensource.org/licenses/MIT
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+[build-system]
+requires = ["setuptools>=75.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "workflow-controller"
+version = "1.0.0"
+description = "Workflow Controller 完整发行包 — Web 控制台、Insight 反代与 Context Bay 上传/导出（内核与内置插件来自 axcor 仓发行包）"
+readme = "README.md"
+requires-python = ">=3.12"
+license = "MIT"
+authors = [{ name = "Workflow Controller Contributors" }]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+]
+dependencies = [
+    "workflow-controller-kernel>=1.0.0",
+    "workflow-controller-plugin-agent-traceback>=0.1.0",
+    "workflow-controller-plugin-breather>=0.1.0",
+    "workflow-controller-plugin-fake-driver>=0.1.0",
+    "workflow-controller-plugin-file-provenance>=0.1.0",
+    "workflow-controller-plugin-graph>=0.1.0",
+    "workflow-controller-plugin-staged-pipeline>=0.1.0",
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.32",
+    "sse-starlette>=3.3",
+]
+
+[project.optional-dependencies]
+dev = [
+    "import-linter>=2.13,<3",
+    "pytest>=8.0",
+    "pytest-asyncio>=0.24",
+    "pytest-cov>=5.0",
+    "ruff>=0.8",
+    "mypy>=1.13",
+    "types-pyyaml>=6.0",
+    "codespell>=2.4,<2.5",
+]
+
+[tool.uv.sources]
+workflow-controller-kernel = { git = "https://github.com/guixu-labs/axcor.git", rev = "3083ad72592fd11e43e7ac2961d1f9a93462007a", subdirectory = "packages/kernel" }
+workflow-controller-plugin-agent-traceback = { git = "https://github.com/guixu-labs/axcor.git", rev = "3083ad72592fd11e43e7ac2961d1f9a93462007a", subdirectory = "packages/plugins/agent-traceback" }
+workflow-controller-plugin-breather = { git = "https://github.com/guixu-labs/axcor.git", rev = "3083ad72592fd11e43e7ac2961d1f9a93462007a", subdirectory = "packages/plugins/breather" }
+workflow-controller-plugin-fake-driver = { git = "https://github.com/guixu-labs/axcor.git", rev = "3083ad72592fd11e43e7ac2961d1f9a93462007a", subdirectory = "packages/plugins/fake-driver" }
+workflow-controller-plugin-file-provenance = { git = "https://github.com/guixu-labs/axcor.git", rev = "3083ad72592fd11e43e7ac2961d1f9a93462007a", subdirectory = "packages/plugins/file-provenance" }
+workflow-controller-plugin-graph = { git = "https://github.com/guixu-labs/axcor.git", rev = "3083ad72592fd11e43e7ac2961d1f9a93462007a", subdirectory = "packages/plugins/graph" }
+workflow-controller-plugin-staged-pipeline = { git = "https://github.com/guixu-labs/axcor.git", rev = "3083ad72592fd11e43e7ac2961d1f9a93462007a", subdirectory = "packages/plugins/staged-pipeline" }
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["workflow_controller*"]
+namespaces = true
+
+[tool.setuptools.package-data]
+"workflow_controller.web" = ["frontend/dist/**/*"]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "W", "F", "I", "N", "UP", "B", "SIM", "TCH", "RUF"]
+# N815：与外部 JSON 字段对齐的 camelCase 命名；E402：部分运行时延迟导入
+ignore = ["E501", "RUF001", "RUF002", "RUF003", "N815", "E402"]
+
+[tool.ruff.lint.per-file-ignores]
+# tests 白盒断言使用字符串成员名形式访问受保护成员（monkeypatch 等）
+"tests/**" = ["B009", "B010"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["workflow_controller"]
+# tests 归入 local-folder 分区（顺序在 first-party 之后），与检查器结论一致
+known-local-folder = ["tests"]
+
+[tool.codespell]
+# CANN 生态专名与 Naive UI 组件名等合法词汇；deriver 为既有设计术语
+ignore-words-list = "CANN,cann,NEmpty,deriver,NAM"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+markers = [
+    "slow: marks tests as slow (deselect with -m 'not slow')",
+    "integration: marks integration tests",
+    "e2e: end-to-end tests (deselect with '-m \"not e2e\"')",
+    "live_llm: tests that spawn a real claude subprocess; skipped unless --live is passed",
+    "reviewer_recall: marks tests that call real claude.CMD reviewer (api cost)",
+]
+
+[tool.importlinter]
+root_package = "workflow_controller"
+exclude_type_checking_imports = true
+
+[[tool.importlinter.contracts]]
+id = "console-static-no-kernel"
+name = "Console insight and spa modules must not import the kernel"
+type = "forbidden"
+source_modules = ["workflow_controller.web.insight", "workflow_controller.web.spa"]
+forbidden_modules = [
+    "workflow_controller.__main__",
+    "workflow_controller.api",
+    "workflow_controller.config",
+    "workflow_controller.core",
+    "workflow_controller.driver",
+    "workflow_controller.event",
+    "workflow_controller.headless",
+    "workflow_controller.hooks",
+    "workflow_controller.logging_config",
+    "workflow_controller.plugin",
+    "workflow_controller.plugins",
+    "workflow_controller.session",
+    "workflow_controller.store",
+    "workflow_controller.support",
+    "workflow_controller.watchdog",
+]
+allow_indirect_imports = true
+
+[[tool.importlinter.contracts]]
+id = "routes-no-composition-root"
+name = "Route modules must not import the web composition root or console assembler"
+type = "forbidden"
+source_modules = ["workflow_controller.web.routes"]
+forbidden_modules = ["workflow_controller.web.app", "workflow_controller.web.console"]
+allow_indirect_imports = true
+
+[tool.coverage.run]
+source = ["workflow_controller"]
+omit = ["tests/*"]
