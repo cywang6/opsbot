@@ -95,7 +95,69 @@ def test_resolve_cpx_session_path_supports_capture_formats(tmp_path, monkeypatch
 
 
 def test_resolve_cpx_session_path_checks_context_insight_default(tmp_path, monkeypatch):
-    """验证 context-insight 新目录查找。"""
+    """验证 context-insight 目录优先于 cannbot-insight fallback。"""
+    home = tmp_path / "home"
+    context_proxy = home / ".context-insight" / "proxy"
+    legacy_proxy = home / ".cannbot-insight" / "proxy"
+    context_proxy.mkdir(parents=True)
+    legacy_proxy.mkdir(parents=True)
+    expected = context_proxy / "cpx-sdk-1.jsonl"
+    stale = legacy_proxy / "cpx-sdk-1.jsonl"
+    expected.write_text("{}\n", encoding="utf-8")
+    stale.write_text("{}\n", encoding="utf-8")
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setattr(Path, "home", lambda: tmp_path / "missing-home")
+
+    assert resolve_cpx_session_path("sdk-1") == expected
+
+
+def test_resolve_cpx_session_path_falls_back_to_cannbot_insight(tmp_path, monkeypatch):
+    """验证仅旧目录存在捕获时使用 cannbot-insight fallback。"""
+    home = tmp_path / "home"
+    legacy_proxy = home / ".cannbot-insight" / "proxy"
+    legacy_proxy.mkdir(parents=True)
+    expected = legacy_proxy / "cpx-sdk-1.jsonl"
+    expected.write_text("{}\n", encoding="utf-8")
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setattr(Path, "home", lambda: tmp_path / "missing-home")
+
+    assert resolve_cpx_session_path("sdk-1") == expected
+
+
+def test_resolve_cpx_session_path_prefers_explicit_configured_root(tmp_path, monkeypatch):
+    """验证 CANNBOT_PROXY_DIR 显式配置优先于两个默认目录。"""
+    home = tmp_path / "home"
+    default_proxy = home / ".context-insight" / "proxy"
+    default_proxy.mkdir(parents=True)
+    (default_proxy / "cpx-sdk-1.jsonl").write_text("{}\n", encoding="utf-8")
+    configured = tmp_path / "configured-proxy"
+    configured.mkdir()
+    expected = configured / "cpx-sdk-1.jsonl"
+    expected.write_text("{}\n", encoding="utf-8")
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setattr(Path, "home", lambda: tmp_path / "missing-home")
+    monkeypatch.setenv("CANNBOT_PROXY_DIR", str(configured))
+
+    assert resolve_cpx_session_path("sdk-1") == expected
+
+
+def test_resolve_cpx_session_path_ignores_context_insight_without_capture(tmp_path, monkeypatch):
+    """验证 context-insight 目录存在但无捕获时回落旧目录。"""
+    home = tmp_path / "home"
+    context_proxy = home / ".context-insight" / "proxy"
+    legacy_proxy = home / ".cannbot-insight" / "proxy"
+    context_proxy.mkdir(parents=True)
+    legacy_proxy.mkdir(parents=True)
+    expected = legacy_proxy / "cpx-sdk-1.jsonl"
+    expected.write_text("{}\n", encoding="utf-8")
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setattr(Path, "home", lambda: tmp_path / "missing-home")
+
+    assert resolve_cpx_session_path("sdk-1") == expected
+
+
+def test_resolve_cpx_session_path_checks_context_insight_only(tmp_path, monkeypatch):
+    """验证仅有 context-insight 目录时可直接命中。"""
     home = tmp_path / "home"
     proxy = home / ".context-insight" / "proxy"
     proxy.mkdir(parents=True)
@@ -119,6 +181,42 @@ def test_locate_source_uses_cpx_capture(monkeypatch: pytest.MonkeyPatch, tmp_pat
     located = getattr(service, "_locate_source")("s1", verb="导入")
 
     assert located[3].path == expected
+
+
+def test_locate_source_uses_cpx_capture_for_codex(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """验证 Codex + cpx 的 Insight 导入优先读取捕获文件。"""
+    monkeypatch.delenv("WORKFLOW_CONTROLLER_DRIVER", raising=False)
+    monkeypatch.setenv("CANNBOT_PROXY_DIR", str(tmp_path / "proxy"))
+    expected = tmp_path / "proxy" / "cpx-sdk-1.jsonl"
+    expected.parent.mkdir()
+    expected.write_text("{}\n", encoding="utf-8")
+    service = _service("codex_cli", "codex_cli", monkeypatch, tmp_path, cli_wrapper="cpx")
+
+    located = getattr(service, "_locate_source")("s1", verb="insight 导入")
+
+    assert (located[3].framework, located[3].kind, located[3].path) == (
+        "claude-code",
+        "claude-jsonl",
+        expected,
+    )
+
+
+def test_locate_source_reports_missing_codex_cpx_capture(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """验证 Codex + cpx 缺捕获时显式报错，不回退原生 rollout。"""
+    monkeypatch.delenv("WORKFLOW_CONTROLLER_DRIVER", raising=False)
+    monkeypatch.setenv("CANNBOT_PROXY_DIR", str(tmp_path / "missing-proxy"))
+    service = _service("codex_cli", "codex_cli", monkeypatch, tmp_path, cli_wrapper="cpx")
+
+    located = getattr(service, "_locate_source")("s1", verb="insight 导入")
+
+    assert located == {
+        "error": "Codex cpx 捕获文件不存在（未回退原生 rollout）: sdk-1",
+        "ok": False,
+    }
 
 
 async def test_upload_compressed_cpx_capture_rejected(
@@ -164,7 +262,7 @@ async def test_insight_import_codex_missing_rollout_rejected(
     assert "Codex rollout not found" in resp["error"]
 
 
-async def test_insight_import_codex_prefers_native_rollout(
+async def test_insight_import_codex_without_cpx_prefers_native_rollout(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
@@ -175,17 +273,12 @@ async def test_insight_import_codex_prefers_native_rollout(
         '{"type":"session_meta","payload":{"id":"sdk-1","thread_source":"user"}}\n',
         encoding="utf-8",
     )
-    proxy = tmp_path / "proxy"
-    proxy.mkdir()
-    (proxy / "cpx-sdk-1.jsonl").write_text("{}\n", encoding="utf-8")
-    monkeypatch.setenv("CANNBOT_PROXY_DIR", str(proxy))
     service = _service(
         "codex_cli",
         "codex_cli",
         monkeypatch,
         tmp_path,
         cwd=str(tmp_path),
-        cli_wrapper="cpx",
     )
 
     located = getattr(service, "_locate_source")("s1", verb="insight 导入")

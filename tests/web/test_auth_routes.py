@@ -16,6 +16,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from types import SimpleNamespace
 
 import pytest
@@ -23,6 +24,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 
 from workflow_controller.api.auth_api import AuthAPI
+from workflow_controller.session.session import SessionState
 from workflow_controller.web.routes import auth_routes
 
 
@@ -61,9 +63,8 @@ class _RotatorStub:
     def get_active_provider_index():
         return 0
 
-    @staticmethod
-    def delete_provider(index):
-        return index == 0
+    def delete_provider(self, index):
+        return 0 <= index < self._provider_count
 
     @staticmethod
     def get_global_settings_dict():
@@ -93,8 +94,30 @@ class _RotatorStub:
         self.saved = kwargs
 
 
+@pytest.fixture(autouse=True)
+def _inline_to_thread(monkeypatch: pytest.MonkeyPatch) -> None:
+    """asyncio.to_thread 目标函数内联执行（环境 workaround）。
+
+    本环境的默认线程池在 loop 关闭阶段退出极慢/挂住（Runner.close 的
+    shutdown_default_executor 带 300s 超时，asyncio.run 路径无超时；
+    main 上本文件的删除成功路径用例即可复现，与本仓库代码无关）。
+    本文件只断言路由/门面行为；线程池委托契约由
+    tests/workflow_controller_core/unit/test_provider_delete.py 的
+    spy 回归用例验证。
+    """
+
+    async def _inline(func, /, *args, **kwargs):
+        return func(*args, **kwargs)
+
+    monkeypatch.setattr(asyncio, "to_thread", _inline)
+
+
 def _request(rotator, sessions=None) -> SimpleNamespace:
-    pool = SimpleNamespace(list_sessions=lambda: sessions or [])
+    # 哑桩：路由层只断言应答形状，pool 回写细节由单元层测试负责
+    async def persist(session) -> None:
+        pass
+
+    pool = SimpleNamespace(list_sessions=lambda: sessions or [], persist=persist)
     api = SimpleNamespace(auth=AuthAPI(SimpleNamespace(auth_rotator=rotator, pool=pool)))
     return SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(api=api)))
 
@@ -159,14 +182,48 @@ async def test_delete_key_maps_missing_and_unavailable() -> None:
     assert unavailable.value.status_code == 503
 
 
-async def test_delete_key_returns_conflict_for_retained_session() -> None:
+async def test_delete_key_returns_conflict_for_running_session() -> None:
     session = SimpleNamespace(
         id="s1",
+        state=SessionState.RUNNING,
         config=SimpleNamespace(provider_index=0, reviewer=None),
     )
     with pytest.raises(HTTPException) as conflict:
         await auth_routes.auth_delete_key(0, _request(_RotatorStub(), [session]))
     assert conflict.value.status_code == 409
+
+
+async def test_delete_key_returns_conflict_for_running_session_index_shift() -> None:
+    """活跃会话引用更高索引：删除低位使其下移，同样 409。"""
+    session = SimpleNamespace(
+        id="s1",
+        state=SessionState.RUNNING,
+        config=SimpleNamespace(provider_index=1, reviewer=None),
+    )
+    with pytest.raises(HTTPException) as conflict:
+        await auth_routes.auth_delete_key(0, _request(_RotatorStub(provider_count=2), [session]))
+    assert conflict.value.status_code == 409
+
+
+async def test_delete_key_allows_running_session_lower_index() -> None:
+    """活跃会话引用低于被删索引：不受移位影响，放行。"""
+    session = SimpleNamespace(
+        id="s1",
+        state=SessionState.RUNNING,
+        config=SimpleNamespace(provider_index=0, reviewer=None),
+    )
+    assert await auth_routes.auth_delete_key(
+        1, _request(_RotatorStub(provider_count=2), [session])
+    ) == {"ok": True}
+
+
+async def test_delete_key_allows_idle_session_reference() -> None:
+    session = SimpleNamespace(
+        id="s1",
+        state=SessionState.IDLE,
+        config=SimpleNamespace(provider_index=0, reviewer=None),
+    )
+    assert await auth_routes.auth_delete_key(0, _request(_RotatorStub(), [session])) == {"ok": True}
 
 
 async def test_activate_rejects_invalid_index() -> None:

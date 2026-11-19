@@ -50,9 +50,19 @@ def _prepare_web_cli(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, Any]]:
     return launched
 
 
+@pytest.mark.parametrize(
+    ("available_command", "expected_command"),
+    [("context-insight", "context-insight"), ("cannbot-insight", "cannbot-insight")],
+)
 @pytest.mark.parametrize("no_open", [False, True])
-def test_cmd_web_starts_default_insight(monkeypatch: pytest.MonkeyPatch, no_open: bool) -> None:
+def test_cmd_web_starts_default_insight(
+    monkeypatch: pytest.MonkeyPatch, available_command: str, expected_command: str, no_open: bool
+) -> None:
     launched = _prepare_web_cli(monkeypatch)
+    monkeypatch.setattr(
+        "workflow_controller.web.cli.shutil.which",
+        lambda command: command if command == available_command else None,
+    )
 
     from workflow_controller.__main__ import cli
 
@@ -63,7 +73,7 @@ def test_cmd_web_starts_default_insight(monkeypatch: pytest.MonkeyPatch, no_open
 
     assert result.exit_code == 0, result.output
     assert len(launched) == 1
-    assert launched[0]["command"] == ["cannbot-insight"]
+    assert launched[0]["command"] == [expected_command]
     assert launched[0]["cwd"] is None
     env = launched[0]["env"]
     assert env["PORT"] == "21877"

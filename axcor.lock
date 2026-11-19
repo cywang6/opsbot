@@ -1,5 +1,5 @@
 # 完整发行包依赖锁定：legacy_source_sha 为本仓最近一次同步的旧仓来源提交，
 # axcor_sha 为 install.sh 构建内核与插件所用的 axcor 提交；推进时需同步更新
 # pyproject.toml 的 git 源 rev 并重新 uv lock。
-legacy_source_sha: f30e1f362debfc1ba45f681876eb6a82bf4a014b
-axcor_sha: c48b5cee6964241062cbdf6e9b034d0312b0e5f2
+legacy_source_sha: 2ca49bbc397ad91d18a791e5e6737e854e84a25e
+axcor_sha: 1812a3f578b9a71cb244e1d174e7f944d4d1d460
