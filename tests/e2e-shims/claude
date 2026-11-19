@@ -1,0 +1,204 @@
+#!/usr/bin/env python3
+# Copyright (c) 2026 Workflow Controller Contributors
+#
+# Licensed under the MIT License (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://opensource.org/licenses/MIT
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+"""E2E CLI shim：Workflow Controller 特性矩阵 e2e 的确定性 claude CLI 替身。
+
+被 `playwright.matrix.config.ts` 的 webServer 前置到 PATH 后，所有
+`claude` 子进程（worker / feedback 评估器 / handoff agent / 接续 worker）
+都由本脚本应答。不访问网络，不校验模型与密钥——矩阵用例与具体模型解耦。
+
+角色识别（prompt 内稳定哨兵）与 worker 场景表提炼在 `shim_common.py`
+（与 opencode shim 共享），本文件只自持 claude 的参数面（-p/--model/
+--resume）与 stream-json 三段式事件组装（init / assistant / result，
+与 `driver/claude_cli.py` 解析层对齐）。
+
+worker 场景表（首轮标记 E2E-SCENARIO:<name>）见 `shim_common.py`：
+- pass-first（默认）        一轮完成；
+- review-then-pass          首轮 INCOMPLETE，第 2 轮按反馈完成；
+- max-iter-never            永不完成（跑满 max_iterations）；
+- ask-human                 首轮问句停等，第 2 轮按人工指示完成；
+- handoff-keep-running      每轮 1.5s 慢速 INCOMPLETE（E4 强制交接跑道）；
+- handoff-auto              每轮上报 900K/1M 用量读数（MX-01 阈值自动交接）；
+- usage-unknown             用量字段非法（MX 交接「用量未知」分支，探测子进程
+                             沿 cwd state.json 同样上报无效读数）；
+- tool-loop                 多行 stream-json：tool_use/tool_result 成功对 +
+                             is_error 失败对 + 孤立结果（MX-12 工具渲染链）；
+- graph-write               [E2E:WRITE:路径:前缀] 产物指令，一轮 DONE；
+- graph-slow-write          同上产物协议，前 10 轮每轮 2s 慢速 INCOMPLETE
+                             （run 面成员级控制的交互窗口），之后 DONE；
+- verify-pass               独立验收 agent 输出独立行 PASS（MX-07）。
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import re
+import sys
+import uuid
+from pathlib import Path
+
+import shim_common as common
+
+
+def _parse_args(argv: list[str]) -> tuple[str, str, str]:
+    prompt = model = resume = ""
+    i = 0
+    while i < len(argv):
+        arg = argv[i]
+        if arg in ("-p", "--model", "--resume") and i + 1 < len(argv):
+            value = argv[i + 1]
+            if arg == "-p":
+                prompt = value
+            elif arg == "--model":
+                model = value
+            else:
+                resume = value
+            i += 1
+        i += 1
+    return prompt, model, resume
+
+
+# tool-loop 场景的固定工具调用 id（断言侧按此配对，跨回合稳定）。
+TOOL_OK_ID = "toolu_e2e_ok_01"
+TOOL_FAIL_ID = "toolu_e2e_fail_02"
+TOOL_ORPHAN_ID = "toolu_e2e_orphan_03"
+
+
+def _tool_loop_lines(session_id: str, model: str) -> list[dict]:
+    """tool-loop 场景的完整 stream-json 行（与 driver/claude_cli.py 解析对齐）。
+
+    覆盖工具调用渲染链的三种形态：成功对（tool_use + 配对 tool_result）、
+    失败对（is_error=true）、孤立结果（无对应 tool_use，UI 按默认规则渲染预览行）。
+    """
+    reply = "工具演练完成 [E2E:DONE]"
+    usage = {"input_tokens": 128, "output_tokens": 32}
+    m = model or "e2e-shim"
+    return [
+        {"type": "system", "subtype": "init", "session_id": session_id,
+         "model": m, "tools": [], "cwd": str(Path.cwd())},
+        {"type": "assistant", "message": {
+            "id": "msg_e2e_tools_1", "model": m,
+            "content": [
+                {"type": "thinking", "thinking": "e2e tool-loop thinking block"},
+                {"type": "text", "text": "先跑两个工具再收尾"},
+                {"type": "tool_use", "id": TOOL_OK_ID, "name": "Bash",
+                 "input": {"command": "echo workflow-controller-e2e-tool-ok"}},
+                {"type": "tool_use", "id": TOOL_FAIL_ID, "name": "Read",
+                 "input": {"file_path": "/nonexistent/e2e-missing.txt"}},
+            ], "usage": usage}},
+        {"type": "system", "subtype": "task_started", "session_id": session_id,
+         "task_id": "e2e-bash-task-not-agent", "tool_use_id": TOOL_OK_ID,
+         "subagent_type": "Bash"},
+        {"type": "user", "message": {"content": [
+            {"type": "tool_result", "tool_use_id": TOOL_OK_ID,
+             "content": "workflow-controller-e2e-tool-ok", "is_error": False},
+        ]}},
+        {"type": "user", "message": {"content": [
+            {"type": "tool_result", "tool_use_id": TOOL_FAIL_ID,
+             "content": "File not found: /nonexistent/e2e-missing.txt",
+             "is_error": True},
+        ]}},
+        {"type": "user", "message": {"content": [
+            {"type": "tool_result", "tool_use_id": TOOL_ORPHAN_ID,
+             "content": "e2e-orphan-result-payload", "is_error": False},
+        ]}},
+        {"type": "assistant", "message": {
+            "id": "msg_e2e_tools_2", "model": m,
+            "content": [{"type": "text", "text": reply}], "usage": usage}},
+        {"type": "result", "subtype": "success", "session_id": session_id,
+         "duration_ms": 5, "num_turns": 1, "total_cost_usd": 0.0,
+         "is_error": False, "usage": usage, "result": reply},
+    ]
+
+
+def _write_transcript(session_id: str, prompt: str, reply: str) -> None:
+    """按真实 claude CLI 的落盘约定写会话 transcript（JSONL）。
+
+    检查点重放（agent_traceback.seed_claude_session）从
+    `$HOME/.claude/projects/<project_key(cwd)>/<session_id>.jsonl` 读源会话
+    对话史；shim 不写 transcript 的话 claude_cli 会话的检查点重放必然
+    「source transcript not found」。best-effort：失败不影响应答。
+    """
+    try:
+        from datetime import datetime, timezone
+
+        key = re.sub(r"[^A-Za-z0-9]", "-", str(Path.cwd().resolve()))
+        # CLAUDE_CONFIG_DIR 直接是配置根；HOME 回退时配置根是 ~/.claude。
+        config_env = os.environ.get("CLAUDE_CONFIG_DIR")
+        home = (Path(config_env) if config_env else Path.home() / ".claude").expanduser()
+        target = home / "projects" / key / f"{session_id}.jsonl"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        now = datetime.now(timezone.utc).isoformat()
+        cwd = str(Path.cwd())
+        rows = [
+            {"type": "user", "message": {"role": "user", "content": prompt},
+             "timestamp": now, "sessionId": session_id, "cwd": cwd,
+             "uuid": "u-" + uuid.uuid4().hex[:16]},
+            {"type": "assistant",
+             "message": {"role": "assistant", "usage": {"input_tokens": 128, "output_tokens": 32},
+                         "model": "e2e-shim", "content": [{"type": "text", "text": reply}]},
+             "timestamp": now, "sessionId": session_id, "cwd": cwd,
+             "uuid": "a-" + uuid.uuid4().hex[:16]},
+        ]
+        with target.open("a") as out:
+            for row in rows:
+                out.write(json.dumps(row, ensure_ascii=False) + "\n")
+    except Exception:
+        pass
+
+
+def main() -> int:
+    prompt, model, resume = _parse_args(sys.argv[1:])
+    match = common.SCENARIO_RE.search(prompt)
+    scenario = match.group(1) if match else None
+
+    if common.EVALUATOR_SENTINEL in prompt:
+        reply, usage = common.evaluator_reply(prompt), {"input_tokens": 128, "output_tokens": 32}
+    elif common.HANDOFF_SENTINEL in prompt:
+        reply, usage = common.handoff_reply(prompt), {"input_tokens": 128, "output_tokens": 32}
+    elif common.CONTINUATION_MARKER in prompt:
+        reply, usage = common.continuation_reply(), {"input_tokens": 128, "output_tokens": 32}
+    elif scenario == "tool-loop":
+        # tool-loop 需要多行 stream-json（工具块在独立消息里），走专用组装；
+        # 一轮完成，场景标记只需被本轮看到（落盘 state.json 供续跑/探测分辨）。
+        common.record_scenario("tool-loop", 1)
+        sid = resume or ("e2e-" + uuid.uuid4().hex[:16])
+        _write_transcript(sid, prompt, "工具演练完成 [E2E:DONE]")
+        for line in _tool_loop_lines(sid, model):
+            print(json.dumps(line, ensure_ascii=False), flush=True)
+        return 0
+    else:
+        reply, usage = common.worker_reply(prompt)
+
+    session_id = resume or ("e2e-" + uuid.uuid4().hex[:16])
+    _write_transcript(session_id, prompt, reply)
+    lines = [
+        {"type": "system", "subtype": "init", "session_id": session_id,
+         "model": model or "e2e-shim", "tools": [], "cwd": str(Path.cwd())},
+        {"type": "assistant", "message": {
+            "id": "msg_e2e", "model": model or "e2e-shim",
+            "content": [{"type": "text", "text": reply}], "usage": usage}},
+        {"type": "result", "subtype": "success", "session_id": session_id,
+         "duration_ms": 5, "num_turns": 1, "total_cost_usd": 0.0,
+         "is_error": False, "usage": usage, "result": reply},
+    ]
+    for line in lines:
+        print(json.dumps(line, ensure_ascii=False), flush=True)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

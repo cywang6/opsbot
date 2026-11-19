@@ -1,0 +1,5 @@
+{
+  "name": "cannbot-insight-e2e-fixture",
+  "private": true,
+  "description": "Deterministic cannbot-insight HTTP fixture for Workflow Controller Web E2E tests"
+}

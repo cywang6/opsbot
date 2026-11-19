@@ -1,0 +1,3 @@
+# The fixture writes .next/dev/lock so `workflow-controller web --insight` skips its port poll;
+# keep the artifact out of the worktree.
+.next/

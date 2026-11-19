@@ -1,0 +1,15 @@
+workflow: e2e-subgraph-child
+max_parallel: 1
+work_dir: .
+agents_dir: ./agents
+nodes:
+  - id: sub-worker
+    task_type: agent
+    executor: e2e-worker
+    task_description: "[E2E-SCENARIO:graph-write] [E2E:WRITE:output/sub-worker.txt:sub-] 写入子图产物后回复 DONE。"
+    task_goal: "写 output/sub-worker.txt，完成后回复 DONE。"
+    acceptance:
+      enabled: true
+      type: script
+      script: test -s output/sub-worker.txt
+    depends_on: []

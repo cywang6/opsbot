@@ -1,0 +1,41 @@
+workflow: e2e-rollback
+description: E2E 回滚 live 冒烟（L3）—— 真模型按「编号递增」指令写产物，验收只认 attempt-3
+max_parallel: 1
+rollback_budget: 1
+work_dir: .
+agents_dir: ./agents
+nodes:
+  - id: init
+    task_type: bash
+    command: mkdir -p output && echo ok > output/init.txt
+    acceptance:
+      enabled: true
+      type: script
+      script: test -f output/init.txt
+    depends_on: []
+
+  - id: worker-a
+    task_type: agent
+    executor: e2e-worker
+    # live 版编排：每次执行把 output/worker-a.txt 的编号 +1（无文件则从 1 起）。
+    # 验收只认 attempt-3 —— 前两次尝试失败触发重试/回滚，回滚后代数重跑时
+    # 编号继续递增到 3 通过。回滚是否发生取决于模型行为，冒烟只断言 run 终态。
+    task_description: "检查 output/worker-a.txt 是否存在：不存在则写入内容 attempt-1；存在则读出当前编号 N，把文件覆盖为 attempt-{N+1}。只做这一件事，完成后回复 DONE。"
+    task_goal: "把 output/worker-a.txt 的编号 +1，完成后回复 DONE。"
+    acceptance:
+      enabled: true
+      type: script
+      script: grep -q "attempt-3" output/worker-a.txt
+      max_retries: 1
+      on_exhaust: rollback
+      rollback_to: init
+    depends_on: [init]
+
+  - id: final
+    task_type: bash
+    command: echo done > output/final.txt
+    acceptance:
+      enabled: true
+      type: script
+      script: test -f output/final.txt
+    depends_on: [worker-a]

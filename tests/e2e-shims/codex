@@ -1,0 +1,108 @@
+#!/usr/bin/env python3
+# Copyright (c) 2026 Workflow Controller Contributors
+#
+# Licensed under the MIT License (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://opensource.org/licenses/MIT
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+"""E2E CLI shim：Workflow Controller 特性矩阵 e2e 的确定性 Codex CLI 替身。
+
+`debug models --bundled` 应答 gpt-5.5 内置模型 catalog；`exec --json`
+输出与 `driver/codex_cli.py` 解析层对齐的 thread.started / item.completed /
+turn.completed 事件流。角色识别与 worker 场景表共享 `shim_common.py`。
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import sys
+import uuid
+from pathlib import Path
+
+import shim_common as common
+
+
+def _parse_exec_args(argv: list[str]) -> tuple[str, str, str]:
+    prompt = model = cd = ""
+    separator = argv.index("--") if "--" in argv else -1
+    if separator >= 0 and separator + 1 < len(argv):
+        prompt = argv[separator + 1]
+
+    i = 0
+    while i < len(argv):
+        if argv[i] == "--":
+            break
+        if argv[i] == "--model" and i + 1 < len(argv):
+            model = argv[i + 1]
+            i += 1
+        elif argv[i] == "--cd" and i + 1 < len(argv):
+            cd = argv[i + 1]
+            i += 1
+        i += 1
+    return prompt, model, cd
+
+
+def _emit(lines: list[dict]) -> None:
+    for line in lines:
+        print(json.dumps(line, ensure_ascii=False), flush=True)
+
+
+def main() -> int:
+    argv = sys.argv[1:]
+    if argv[:3] == ["debug", "models", "--bundled"]:
+        print(json.dumps({"models": [{"slug": "gpt-5.5"}]}))
+        return 0
+    if not argv or argv[0] != "exec":
+        return 1
+
+    prompt, _model, cd = _parse_exec_args(argv[1:])
+    if not prompt:
+        return 1
+    if cd:
+        Path(cd).expanduser().mkdir(parents=True, exist_ok=True)
+        os.chdir(cd)
+
+    if common.EVALUATOR_SENTINEL in prompt:
+        reply, usage = (
+            common.evaluator_reply(prompt),
+            {
+                "input_tokens": 128,
+                "output_tokens": 32,
+            },
+        )
+    elif common.CONTINUATION_MARKER in prompt:
+        reply, usage = (
+            common.continuation_reply(),
+            {
+                "input_tokens": 128,
+                "output_tokens": 32,
+            },
+        )
+    else:
+        reply, usage = common.worker_reply(prompt)
+
+    thread_id = "codex-e2e-" + uuid.uuid4().hex[:16]
+    _emit(
+        [
+            {"type": "thread.started", "thread_id": thread_id},
+            {
+                "type": "item.completed",
+                "item": {"id": "item_e2e", "type": "agent_message", "text": reply},
+            },
+            {"type": "turn.completed", "usage": usage},
+        ]
+    )
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
