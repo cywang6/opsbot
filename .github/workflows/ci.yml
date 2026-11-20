@@ -49,3 +49,23 @@ jobs:
 
       - name: 构建发行包
         run: uv build
+
+  install:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: install.sh 干净环境安装（隔离 HOME）
+        env:
+          ISOLATED_HOME: ${{ runner.temp }}/isolated-home
+        run: |
+          mkdir -p "$ISOLATED_HOME"
+          HOME="$ISOLATED_HOME" ./install.sh
