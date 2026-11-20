@@ -17,7 +17,7 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { NButton, NEmpty, NList, NListItem, NModal, NSpin } from 'naive-ui'
+import { NButton, NEmpty, NList, NListItem, NModal, NSpin, NTag } from 'naive-ui'
 import { useSettingsModal } from '../../composables/useSettingsModal'
 import { useRecentDirs } from '../../composables/useRecentDirs'
 import { useProjectPaths } from '../../composables/useProjectPaths'
@@ -61,6 +61,9 @@ const brandName = computed(
 const activeSessionId = computed(() => {
   return route.name === 'sessionDetail' ? String(route.params.id || '') : ''
 })
+const activeRunId = computed(() => {
+  return route.name === 'runView' ? String(route.params.id || '') : ''
+})
 const hasRunningSessions = computed(() => sessions.value.some(session => session.state === 'running'))
 
 const showRunHistory = ref(false)
@@ -77,6 +80,18 @@ async function openRunHistory() {
     loadingRuns.value = false
   }
 }
+
+// 运行记录状态 → 中文标签 / 标签底色（与 RunView statusMeta 保持一致）
+const RUN_STATUS_LABEL: Record<string, string> = {
+  pending: '待运行', running: '运行中', paused: '已暂停',
+  completed: '已完成', failed: '失败', stopped: '已停止',
+}
+const RUN_STATUS_COLOR: Record<string, string> = {
+  pending: '#999999', running: '#f0a020', paused: '#0891b2',
+  completed: '#52c41a', failed: '#f5222d', stopped: '#bfbfbf',
+}
+function runStatusLabel(status: string) { return RUN_STATUS_LABEL[status] || status }
+function runStatusColor(status: string) { return RUN_STATUS_COLOR[status] || '#999999' }
 
 function sessionTitle(session: any) { return session.name || session.title || session.id }
 
@@ -161,8 +176,65 @@ const sessionsByProject = computed(() => {
   return grouped
 })
 
-function projectSessions(path: string) {
-  return sessionsByProject.value.get(normalizeDir(path)) || []
+// graph 节点会话按 run 归组：每个 graph 工作流在侧边栏只显示一条入口，
+// 点击进入 Run/DAG 视图；节点会话本身仍不进会话列表。入口仅从带
+// plugin_metadata.graph 的成员 session 派生——纯 bash 节点的 graph run
+// （或首个 agent 成员尚未拉起的窗口期）不会生成入口，只能从运行历史进入。
+const graphEntriesByProject = computed(() => {
+  const entries = new Map<string, any[]>()
+  const byRun = new Map<string, { key: string; sessions: any[] }>()
+  for (const session of sessions.value) {
+    const g = (session.plugin_metadata as any)?.graph
+    if (!g || !session.run_id) continue
+    const key = normalizeDir(logicalProjectDir(session, sessions.value))
+    if (!key) continue
+    const bucket = byRun.get(session.run_id)
+    if (bucket) {
+      bucket.sessions.push(session)
+    } else {
+      byRun.set(session.run_id, { key, sessions: [session] })
+    }
+  }
+  for (const { key, sessions: arr } of byRun.values()) {
+    const g = (arr[0].plugin_metadata as any)?.graph
+    const created = arr
+      .map((s) => s.created_at_iso)
+      .filter((s): s is string => Boolean(s))
+    const earliest = created.length
+      ? created.reduce((a, b) => (a < b ? a : b))
+      : ''
+    const item = {
+      kind: 'graph',
+      id: `graph:${arr[0].run_id}`,
+      run_id: arr[0].run_id,
+      title: g?.graph_id || arr[0].run_id,
+      state: arr.some((s) => s.state === 'running') ? 'running' : 'stopped',
+      created_at_iso: earliest,
+    }
+    const list = entries.get(key) || []
+    list.push(item)
+    entries.set(key, list)
+  }
+  return entries
+})
+
+function projectItems(path: string) {
+  const key = normalizeDir(path)
+  const normal = (sessionsByProject.value.get(key) || []).map((s: any) => ({ kind: 'session', ...s }))
+  const graphs = graphEntriesByProject.value.get(key) || []
+  return [...normal, ...graphs].sort((a, b) =>
+    String(b.created_at_iso || '').localeCompare(String(a.created_at_iso || '')))
+}
+
+function openItem(item: any) {
+  if (item.kind === 'graph') router.push(`/run/${item.run_id}`)
+  else openSession(item.id)
+}
+
+function onItemActivate(event: KeyboardEvent, item: any) {
+  if (event.target !== event.currentTarget) return
+  if (event.key === ' ') event.preventDefault()
+  openItem(item)
 }
 
 function isProjectExpanded(path: string) {
@@ -194,12 +266,6 @@ function onProjectRowActivate(event: KeyboardEvent, path: string) {
   if (event.key === ' ') event.preventDefault()
   void selectProject(path)
 }
-function onSessionRowActivate(event: KeyboardEvent, id: string) {
-  if (event.target !== event.currentTarget) return
-  if (event.key === ' ') event.preventDefault()
-  openSession(id)
-}
-
 // 项目行「＋」：与行点击一致地持久化 project_dir（PUT /api/v1/config + SSE 回推），
 // 再打开新建会话弹窗，避免刷新后选中态回跳、或在 SSE config_update 回推前被覆盖。
 async function onNewSessionInProject(path: string) {
@@ -253,11 +319,11 @@ async function onNewSessionInProject(path: string) {
           </span>
         </div>
         <div v-if="isProjectExpanded(path)" :id="`project-sessions-${idx}`" class="project-sessions">
-          <div v-for="item in projectSessions(path)" :key="item.id" class="project-session-row" :class="{ active: activeSessionId === item.id, 'idle-session': item.state === 'idle' }" role="button" tabindex="0" :title="sessionTitle(item)" @click="openSession(item.id)" @keydown.enter="onSessionRowActivate($event, item.id)" @keydown.space="onSessionRowActivate($event, item.id)">
+          <div v-for="item in projectItems(path)" :key="item.id" class="project-session-row" :class="{ active: item.kind === 'graph' ? activeRunId === item.run_id : activeSessionId === item.id, 'idle-session': item.state === 'idle' }" role="button" tabindex="0" :title="item.kind === 'graph' ? (item.title || item.run_id) : sessionTitle(item)" @click="openItem(item)" @keydown.enter="onItemActivate($event, item)" @keydown.space="onItemActivate($event, item)">
             <span v-if="item.state === 'running'" title="会话正在运行" class="project-running-dot" aria-label="会话正在运行" />
             <span v-else-if="item.state !== 'idle'" class="history-dot" :class="`state-${item.state || 'idle'}`" />
-            <span class="history-name">{{ sessionTitle(item) }}</span>
-            <button v-if="item.state !== 'running'" class="history-delete" title="删除会话" @click="openDeleteDialog(item, $event)">×</button>
+            <span class="history-name">{{ item.kind === 'graph' ? (item.title || item.run_id) : sessionTitle(item) }}</span>
+            <button v-if="item.kind !== 'graph' && item.state !== 'running'" class="history-delete" title="删除会话" @click="openDeleteDialog(item, $event)">×</button>
           </div>
         </div>
       </div>
@@ -295,7 +361,14 @@ async function onNewSessionInProject(path: string) {
           :title="run.run_id"
           @click="showRunHistory = false"
         >{{ run.label || run.run_id }}</router-link>
-        <template #suffix>{{ run.status }}</template>
+        <template #suffix>
+          <n-tag
+            size="small"
+            :bordered="false"
+            round
+            :color="{ color: runStatusColor(run.status) }"
+          >{{ runStatusLabel(run.status) }}</n-tag>
+        </template>
       </n-list-item>
     </n-list>
     <n-empty v-else description="暂无运行记录" />
@@ -457,7 +530,7 @@ async function onNewSessionInProject(path: string) {
   border-top: 1px solid rgba(148,163,184,.14);
   margin-top: 4px;
 }
-.run-history-link { color: var(--workflow-controller-primary); overflow-wrap: anywhere; }
+.run-history-link { color: var(--workflow-controller-primary); overflow-wrap: anywhere; text-decoration: none; }
 .settings-btn {
   box-sizing: border-box;
   display: flex;
@@ -482,6 +555,7 @@ async function onNewSessionInProject(path: string) {
 .history-dot { position:relative; display:grid; place-items:center; width:18px; height:18px; flex:0 0 18px; color:#64748b; }
 .history-dot::after { content:""; width:7px; height:7px; border-radius:50%; background:currentColor; }
 .history-dot.state-running { color:#35d6b1; }
+.history-dot.state-stopped { color:#bfbfbf; }
 .history-name { min-width:0; flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:12px; }
 .history-delete {
   opacity:1;

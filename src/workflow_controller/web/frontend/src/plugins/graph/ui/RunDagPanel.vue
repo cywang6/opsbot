@@ -282,6 +282,7 @@ watch([() => props.projection, allProviders], () => {
   --run-st-passed: #1a7f37;
   --run-st-failed: #cf222e;
   --run-st-running: #9a6700;
+  --run-st-stopped: #0969da;
   --run-st-pending: #8c959f;
   --run-st-carried: #1b7c83;
   --run-st-unknown: #57606a;
@@ -301,6 +302,7 @@ html[data-theme-mode='dark'] {
   --run-st-passed: #3fb950;
   --run-st-failed: #f85149;
   --run-st-running: #d29922;
+  --run-st-stopped: #58a6ff;
   --run-st-pending: #8d96a0;
   --run-st-carried: #39c5cf;
   --run-st-unknown: #6e7681;

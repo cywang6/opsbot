@@ -102,7 +102,7 @@ function syntheticMemberId(runId: string, nodePath: string, generation: number, 
 }
 
 function executionState(status: string | undefined): string {
-  return TERMINAL_STATUSES.has(String(status)) ? 'finished' : 'in_progress'
+  return status === 'stopped' || TERMINAL_STATUSES.has(String(status)) ? 'finished' : 'in_progress'
 }
 
 type MemberOut = Record<string, unknown> & { id: string; kind: string }
@@ -180,7 +180,7 @@ export function projectionToRunIndex(
       fact.verify = { ...(fact.verify ?? {}), ...verify }
     }
   }
-  // 快照档案只补事件没给的当前 attempt 事实（exporter.note_record 同序）
+  // 当前快照可更新运行与停止状态，事件中的已完成结论优先。
   for (const [key, rec] of records) {
     if (rec.attempts <= 0) continue
     const [nid, gen] = parseKey(key)
@@ -191,7 +191,10 @@ export function projectionToRunIndex(
     if (fact.finished_at === undefined && rec.finishedAt !== null) fact.finished_at = rec.finishedAt
     if (fact.output === undefined && rec.output !== null) fact.output = rec.output
     if (fact.session_id === undefined && rec.sessionId !== null) fact.session_id = rec.sessionId
-    if (fact.status === undefined) fact.status = rec.status
+    const activeState = rec.status === 'running' || rec.status === 'stopped'
+    if (fact.status === undefined || (activeState && !TERMINAL_STATUSES.has(fact.status))) {
+      fact.status = rec.status
+    }
   }
 
   // ── 结构知识：generator / xlsx 子图 / 代集 ──
@@ -302,6 +305,7 @@ export function projectionToRunIndex(
     const fields: Record<string, unknown> = {
       nodeId: nid, generation: gen, attempt,
       executionState: executionState(status),
+      nodeStatus: status,
     }
     if (status === 'passed') fields.attemptResult = 'succeeded'
     else if (status === 'failed') fields.attemptResult = 'failed'
@@ -346,7 +350,7 @@ export function projectionToRunIndex(
     const verify = fact.verify
     if (!verify || !(verify.verify_type || verify.verify_session_id)) return
     const status = fact.status ?? 'pending'
-    const verdict = status === 'passed' ? 'passed' : status === 'failed' ? 'failed' : 'running'
+    const verdict = status === 'passed' || status === 'failed' || status === 'stopped' ? status : 'running'
     const verification: Record<string, unknown> = { type: verify.verify_type || 'agent', status: verdict }
     if ((status === 'passed' || status === 'failed') && verify.verify_reason) verification.reason = verify.verify_reason
     const fields: Record<string, unknown> = {
@@ -543,11 +547,11 @@ export function projectionToRunIndex(
   }
 
   // ── manifest 装配（嵌套：容器成员的 data 携带子成员/关系）──
-  for (const member of topMembers) {
-    const children = childMembers.get(member.id)
-    if (member.kind === 'workflow' && children) {
-      ;(member as Record<string, unknown>).data = {
-        members: children,
+  for (const members of [topMembers, ...childMembers.values()]) {
+    for (const member of members) {
+      if (member.kind !== 'workflow') continue
+      member.data = {
+        members: childMembers.get(member.id) ?? [],
         relations: subRelations.get(member.id) ?? [],
       }
     }

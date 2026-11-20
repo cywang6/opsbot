@@ -122,13 +122,35 @@ describe('projectionToRunIndex：成员判定', () => {
     expect(prep.attempts[0].startedAt).toBe('2026-01-01T10:00:00Z')
   })
 
+  it('有两个并行节点时，依照当前状态显示执行和验收，并在停止后移除运行中状态', () => {
+    const nodes = [
+      { id: 'first', task_type: 'agent', status: 'running', attempts: 1 },
+      { id: 'second', task_type: 'agent', status: 'running', attempts: 1 },
+    ]
+    const events = [hist({
+      node_id: 'second', attempt: 1, status: 'running', verify_session_id: 'ses_verify',
+    })]
+    const projection = { ...BASE_PROJECTION, nodes, edges: [] }
+    expect(buildVm(projection, events).vm.nodes.map(n => n.status)).toEqual(['running', 'running'])
+
+    const stopped = { ...projection, nodes: nodes.map(n => ({ ...n, status: 'stopped' })) }
+    const { vm } = buildVm(stopped, events)
+    expect(vm.nodes.map(n => n.status)).toEqual(['stopped', 'stopped'])
+    expect(findNodeInstance(vm, 'second', 0)?.attempts[0].verification.status).toBe('stopped')
+  })
+
   it('事件流合并：起步事件（running + session）与结论事件（passed + 验收）合并为同一 attempt', () => {
     const events = [
       hist({ node_id: 'prep', gen: 0, attempt: 1, status: 'running', workflow_controller_session_id: 'ses_prep', started_at: '2026-01-01T10:00:00Z' }),
       hist({ node_id: 'prep', gen: 0, attempt: 1, status: 'passed', verify_type: 'script', verify_reason: '全部断言通过' }),
     ]
-    const { vm } = buildVm(BASE_PROJECTION, events)
+    const projection = {
+      ...BASE_PROJECTION,
+      nodes: BASE_PROJECTION.nodes.map(n => n.id === 'prep' ? { ...n, status: 'running' } : n),
+    }
+    const { vm } = buildVm(projection, events)
     const prep = findNodeInstance(vm, 'prep', 0)!
+    expect(prep.status).toBe('passed')
     expect(prep.attempts).toHaveLength(1)
     expect(prep.attempts[0].executeMember.sessionId).toBe('ses_prep')
     expect(prep.attempts[0].startedAt).toBe('2026-01-01T10:00:00Z')
@@ -206,6 +228,28 @@ describe('projectionToRunIndex：回滚与承接', () => {
 })
 
 describe('projectionToRunIndex：子图容器', () => {
+  it.each([
+    { status: 'pending', attempts: 0 },
+    { status: 'failed', attempts: 1 },
+  ])('子图尚无子节点时仍渲染主图（$status）', ({ status, attempts }) => {
+    const projection = {
+      ...BASE_PROJECTION,
+      nodes: [
+        ...BASE_PROJECTION.nodes,
+        { id: 'child-graph', task_type: 'generator', display_type: 'subgraph', status, attempts },
+      ],
+      edges: [...BASE_PROJECTION.edges, { from: 'build', to: 'child-graph' }],
+    }
+    const { vm } = buildVm(projection, [])
+    expect(vm.views).toHaveLength(1)
+    const node = findNodeInstance(vm, 'child-graph', 0)
+    expect(node?.taskType).toBe('workflow')
+    expect(node?.hasSubgraph).toBe(false)
+    expect(vm.views[0].edges).toContainEqual({
+      from: nodeKeyOf('build', 0), to: nodeKeyOf('child-graph', 0),
+    })
+  })
+
   it('xlsx 子图（display_type=subgraph）：generator 执行成员即容器，子节点全 id 挂接', () => {
     const projection = {
       ...BASE_PROJECTION,
