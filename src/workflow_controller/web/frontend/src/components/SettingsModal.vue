@@ -967,7 +967,7 @@ function onDirSelected(path: string) {
       </div>
 
       <!-- 右侧内容区 -->
-      <div style="flex:1;overflow-y:auto;padding-left:16px;min-height:0;max-height:65vh">
+      <div style="flex:1;min-width:0;overflow:auto;padding-left:16px;min-height:0;max-height:65vh">
         <!-- 外观 -->
         <div v-show="activeSection==='外观'">
           <n-flex vertical :size="16">
@@ -1205,16 +1205,16 @@ function onDirSelected(path: string) {
               </n-flex>
             </n-card>
 
-            <n-card :title="`已配置（${authStatus.provider_count || 0}）`" size="small" embedded>
-              <n-data-table
-                v-if="authStatus.providers?.length"
-                :columns="providerColumns"
-                :data="authStatus.providers"
-                :bordered="false"
-                size="small"
-                table-layout="fixed"
-                :scroll-x="1350"
-              />
+            <n-card :title="`已配置（${authStatus.provider_count || 0}）`" size="small" embedded style="min-width:0">
+              <div v-if="authStatus.providers?.length" style="overflow-x:auto; max-width:100%">
+                <n-data-table
+                  :columns="providerColumns"
+                  :data="authStatus.providers"
+                  :bordered="false"
+                  size="small"
+                  table-layout="fixed"
+                />
+              </div>
               <n-empty v-else description="未配置供应商" size="small" />
             </n-card>
           </n-flex>

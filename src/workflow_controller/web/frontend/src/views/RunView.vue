@@ -199,7 +199,7 @@ watch(runId, () => {
   void loadDetail()
 }, { immediate: true })
 
-async function doControl(action: 'resume' | 'stop' | 'restart') {
+async function doControl(action: 'pause' | 'resume' | 'stop' | 'restart') {
   acting.value = true
   try {
     if (await control(runId.value, action)) {
@@ -312,17 +312,19 @@ async function doExport() {
               </n-alert>
 
               <n-flex align="center" :size="8">
+                <n-button v-if="run.status === 'running'" size="small" tertiary :loading="acting"
+                          @click="doControl('pause')">暂停</n-button>
                 <n-button v-if="run.status === 'paused'" size="small" tertiary :loading="acting"
-                          @click="doControl('resume')">恢复</n-button>
+                          @click="doControl('resume')">续跑</n-button>
                 <n-tooltip v-if="!terminal" trigger="hover" placement="bottom">
                   <template #trigger>
                     <n-button size="small" type="error" ghost :loading="acting"
                               @click="doControl('stop')">停止</n-button>
                   </template>
-                  终止本次运行，之后可通过重启恢复
+                  终止本次运行，之后可通过续跑恢复
                 </n-tooltip>
                 <n-button v-if="terminal" size="small" tertiary :loading="acting"
-                          @click="doControl('restart')">重启</n-button>
+                          @click="doControl('restart')">续跑</n-button>
                 <n-tooltip trigger="hover" placement="bottom">
                   <template #trigger>
                     <n-button v-if="run.status !== 'pending' && run.kind !== 'implicit'" size="small" tertiary

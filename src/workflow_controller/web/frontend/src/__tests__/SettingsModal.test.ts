@@ -638,7 +638,10 @@ describe('SettingsModal provider errors', () => {
       if (String(input) === '/api/v1/auth/test-key' && init?.method === 'POST') {
         return jsonResponse({
           success: true,
-          worker: { status: 'invalid', error: 'protocol mismatch' },
+          worker: {
+            status: 'invalid',
+            error: 'gateway does not support this model with OpenAI Responses format',
+          },
           reviewer: { status: 'valid' },
         })
       }
@@ -660,6 +663,12 @@ describe('SettingsModal provider errors', () => {
     expect(
       dialogs.info.mock.calls.some(args => (args as any[])[0]?.title === 'Reviewer 检测通过'),
     ).toBe(true)
+    const reviewerDialog = dialogs.info.mock.calls
+      .map(args => (args as any[])[0])
+      .find(option => option?.title === 'Reviewer 检测通过')
+    expect(reviewerDialog?.content().children).toBe(
+      'Worker 不可用：gateway does not support this model with OpenAI Responses format',
+    )
     expect(setupState.pendingKeyTestOk).toBe(true)
     expect(findButton('添加并保存')?.disabled).toBe(false)
   })

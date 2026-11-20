@@ -42,7 +42,7 @@ export interface SessionMemberRef {
 
 export interface AttemptRecord {
   ordinal: number;             // 本代第几次尝试（1 起）
-  status: 'passed' | 'failed' | 'running' | 'unknown';
+  status: 'passed' | 'failed' | 'running' | 'stopped' | 'unknown';
   startedAt: string | null;
   finishedAt: string | null;
   outputText: string | null;   // process 成员的 Bash 输出（可能截断）
@@ -51,7 +51,7 @@ export interface AttemptRecord {
   verifyMember: SessionMemberRef | null;
 }
 
-export type NodeStatus = 'passed' | 'failed' | 'running' | 'pending' | 'carried' | 'unknown';
+export type NodeStatus = AttemptRecord['status'] | 'pending' | 'carried';
 
 export interface NodeInstance {
   key: string;                 // `n-<nodeId>-g<generation>`
@@ -232,7 +232,9 @@ function attemptStatus(execute: IndexedMember, verify: IndexedMember | undefined
   const result = execute.graph?.attemptResult;
   if (result === 'succeeded') return 'passed';
   if (result === 'failed') return 'failed';
-  // 无最终结论：验收 running 或成员已开始未结束 → 运行中（原型为 unknown 的增强）
+  const nodeStatus = execute.member.nodeStatus;
+  if (nodeStatus === 'stopped' || nodeStatus === 'running') return nodeStatus;
+  // 归档数据没有实时状态时，通过验收状态或成员时间推断。
   if (verify?.graph?.verification?.status === 'running') return 'running';
   if (execute.member.startedAt && !execute.member.finishedAt) return 'running';
   return 'unknown';
