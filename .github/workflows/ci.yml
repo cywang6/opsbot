@@ -52,6 +52,8 @@ jobs:
 
   install:
     runs-on: ubuntu-latest
+    # install.sh 会从公网 clone axcor，git clone 自身无超时，兜底防挂起
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
 
