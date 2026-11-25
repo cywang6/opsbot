@@ -15,7 +15,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
 import { nextTick, reactive, ref } from 'vue'
-import { NInputNumber, NSelect, NSwitch } from 'naive-ui'
+import { NInputNumber, NSelect, NSwitch, NTooltip } from 'naive-ui'
 import type { SessionFormState } from '../components/SessionForm.vue'
 
 type TestSessionForm = Omit<SessionFormState, 'runtime' | 'cliWrapper'> &
@@ -68,6 +68,14 @@ async function mountExpandedFormWithProviders(runtime: string) {
       worker_validation: { status: 'invalid', error: 'protocol mismatch' },
       reviewer_validation: { status: 'valid' },
     },
+    {
+      index: 2,
+      model: 'opencode-only',
+      runtime: 'opencode',
+      status: 'active',
+      worker_validation: { status: 'valid' },
+      reviewer_validation: { status: 'invalid', error: 'protocol mismatch' },
+    },
   ]
   return mountExpandedForm(null, runtime)
 }
@@ -118,17 +126,67 @@ describe('SessionForm evaluator hint', () => {
     wrapper.unmount()
   })
 
-  it('lists only providers valid for the selected capability', async () => {
+  it('keeps valid runtime mismatches visible but disabled', async () => {
     const { wrapper } = await mountExpandedFormWithProviders('codex_cli')
     const selects = wrapper.findAllComponents(NSelect)
     const options = selects.map(select => select.props('options') as any[])
 
     expect(options[1]).toEqual([
       { label: 'worker-only', value: '0', disabled: false },
+      { label: 'opencode-only（绑定 OpenCode）', value: '2', disabled: true },
     ])
     expect(options[2]).toEqual([
-      { label: 'reviewer-only', value: '1', disabled: false },
+      { label: 'Codex CLI：reviewer-only', value: '1', disabled: false },
     ])
+    wrapper.unmount()
+    mockAuthState.value.providers = []
+  })
+
+  it('prefixes reviewer model options with the provider runtime label', async () => {
+    mockAuthState.value.providers = [
+      {
+        index: 0,
+        model: 'glm-4.7',
+        custom_name: 'glm-4.7-prod',
+        base_url: 'https://glm.test/v1',
+        runtime: 'codex_cli',
+        status: 'active',
+        worker_validation: { status: 'valid' },
+        reviewer_validation: { status: 'valid' },
+      },
+      {
+        index: 1,
+        model: 'claude-sonnet-4-5',
+        custom_name: 'claude-sonnet-prod',
+        base_url: 'https://sonnet.test/v1',
+        runtime: 'claude_sdk',
+        status: 'active',
+        worker_validation: { status: 'valid' },
+        reviewer_validation: { status: 'valid' },
+      },
+      {
+        index: 2,
+        model: 'quota-exhausted',
+        custom_name: 'quota-exhausted',
+        runtime: 'claude_sdk',
+        status: 'exhausted',
+        reviewer_validation: { status: 'valid' },
+      },
+    ]
+    const { wrapper } = await mountExpandedForm(null)
+    const selects = wrapper.findAllComponents(NSelect)
+
+    expect((selects[1].props('options') as any[])).toEqual([
+      { label: 'glm-4.7-prod', value: '0', disabled: false },
+      { label: 'claude-sonnet-prod', value: '1', disabled: false },
+    ])
+    expect((selects[2].props('options') as any[])).toEqual([
+      { label: 'Codex CLI：glm-4.7-prod', value: '0', disabled: false },
+      { label: 'Claude SDK：claude-sonnet-prod', value: '1', disabled: false },
+    ])
+    const renderLabel = selects[1].props('renderLabel') as (option: any) => any
+    expect(renderLabel({ label: 'missing-url', value: '9' })).toBe('missing-url')
+    expect(renderLabel({ label: 'glm-4.7-prod', value: '0' }).type).toBe(NTooltip)
     wrapper.unmount()
     mockAuthState.value.providers = []
   })
