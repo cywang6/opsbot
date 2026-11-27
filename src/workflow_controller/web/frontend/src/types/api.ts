@@ -31,7 +31,9 @@ export interface SessionInfo {
   result: string | null
   predecessor: { id: string; name: string } | null
   successors: Array<{ id: string; name: string }>
-  sdk_session_id: string | null
+  native_session_id: string | null
+  /** 兼容 axcor v0.2.0 之前的运行时会话 ID 字段。 */
+  sdk_session_id?: string | null
   project_dir?: string
   run_id?: string | null
   plugin_metadata?: Record<string, unknown>
@@ -99,7 +101,6 @@ export interface ConfigInfo {
   agents_path: string
   hook_server: {
     enabled: boolean
-    port: number
     host: string
   }
   reviewer: {

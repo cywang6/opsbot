@@ -468,10 +468,10 @@ class ContextBayConsoleService:
         context = self._api.session.transcript_context(session_id)
         if context is None:
             return {"error": "Session not found", "ok": False}
-        sdk_session_id = context["sdk_session_id"]
+        sdk_session_id = context.get("native_session_id") or context.get("sdk_session_id")
         if not sdk_session_id:
             return {
-                "error": "Session has no sdk_session_id (not an opencode/claude/codex session)",
+                "error": "Session has no session id (not an opencode/claude/codex session)",
                 "ok": False,
             }
         runtime = self._api.session.effective_runtime(session_id)

@@ -292,8 +292,8 @@ run 是记账/控制/观测/删除/恢复/导出的唯一公共锚；前端首�
 - **恢复**：恢复已暂停的会话。普通会话（隐式 run 成员）同目录有其他运行中会话时不拦截——宿主不做目录占用互斥；**workflow run 成员**的恢复经 run 级端点（A8 单一写者），前端按所属 run 行预判拒绝原因并禁用呈因：run 已暂停（先整图恢复）/ run 已结束（去 Run 页重启）/ 成员自然结束（无需恢复）/ 非用户暂停断点（由驱动调度，去 Run 页操作）/ 同目录有其他运行中会话（同 run 成员除外——驱动自管并发）。服务端 409 拒绝（如节点验收态变化）以 toast 透传 detail 结构化原因。**路由判定的归属确认窗口**：成员操作按所属 run 行 `kind` 分面，行未拉到（含瞬时失败退避重试期间）时暂停/恢复/发送按「归属确认中」禁用——workflow 成员误投 session 面必被单一写者守卫 409 拒绝，不能靠默认面碰运气；run 行 404 视为已删（无 run 面可指路），与后端守卫同判直通 session 面。run 行拉取失败按指数退避自动重试（300ms 起倍增、封顶 5s，与 RunView 详情失败兜底同款策略），成功或 404 即停；注入失败时输入框内容回填，不静默丢失用户输入。
 - **Run 徽章**（workflow run 成员显示）：所属 run 的状态色徽章 + label，点击跳 `/run/:run_id`——取代旧「查看 Graph」跳转，作为成员页进入 run 面的唯一入口。
 - **📥 下载重建日志**（仅 `isReconstructed` 的 session 显示，与「恢复」「告警」同排，带 `aria-label="下载重建日志"` 供屏幕阅读器读取）：从 `birth_traceback.fork_cwd` 取重建目标目录，浏览器原生 GET `/api/sessions/import-db/log?target_cwd=<encoded>` 下载 `reconstruction.log`。用于在会话详情页直接核对重建过程、定位失败命令（`grep status=error`）。非重建 session 不显示该按钮。
-- **🔍 Insight 导入的 runtime→source 映射**：`POST /insight/import` 与 Context Bay 上传按会话 effective runtime 定位源（per-session `runtime=None` 时继承全局默认）——`claude_sdk` / `claude_code`（旧名）/ `claude_cli` → `~/.claude/projects/<cwd编码>/<sdk_session_id>.jsonl`（claude-jsonl）；`opencode` → opencode.db；其余 runtime 明确报「暂不支持」（不落 opencode 分支给误导性错误）。
-- **🔍 Insight**：导入后前端打开服务端返回的 `/insight/run/solo:{taskId}`，其中 `taskId` 是运行时会话 ID（`sdk_session_id`）。Workflow Controller 去掉 `/insight` 前缀，将请求同源转发到 context-insight 的 `/run/solo:{taskId}` 工作台。对于仍提供独立会话页的旧版 Insight，solo run 页面返回 404 时，Workflow Controller 将浏览器重定向到 `/insight/session/{taskId}`。远程 SSH 场景只需转发 Workflow Controller 的端口。
+- **🔍 Insight 导入的 runtime→source 映射**：`POST /insight/import` 与 Context Bay 上传按会话 effective runtime 定位源（per-session `runtime=None` 时继承全局默认）——`claude_sdk` / `claude_code`（旧名）/ `claude_cli` → `~/.claude/projects/<cwd编码>/<native_session_id>.jsonl`（claude-jsonl）；`opencode` → opencode.db；其余 runtime 明确报「暂不支持」（不落 opencode 分支给误导性错误）。前端读取 `native_session_id`，旧数据缺失时兜底 `sdk_session_id`。
+- **🔍 Insight**：导入后前端打开服务端返回的 `/insight/run/solo:{taskId}`，其中 `taskId` 是运行时会话 ID（`native_session_id`）。Workflow Controller 去掉 `/insight` 前缀，将请求同源转发到 context-insight 的 `/run/solo:{taskId}` 工作台。对于仍提供独立会话页的旧版 Insight，solo run 页面返回 404 时，Workflow Controller 将浏览器重定向到 `/insight/session/{taskId}`。远程 SSH 场景只需转发 Workflow Controller 的端口。
 
   Next.js 以绝对路径请求 `/_next/*`、`/icon.svg` 及 `/api/{observe,ingest,ai,settings,breather,config}/*` 下的 Insight 资源。Workflow Controller 同源转发这些请求以及开发模式的 `/_next/webpack-hmr` WebSocket。若数据 API 与 Workflow Controller 路由重叠，由 Workflow Controller 先注册的路由处理。
 
@@ -375,7 +375,7 @@ Swagger 的 `POST /api/v1/auth/test-key` 展示供应商试测的 JSON 请求字
 | 项目目录 | **当前项目指针**——决定「项目设置」区改哪个项目；也是 worker cwd + `.workflow-controller/` 工作区位置。改了 + Save → 项目设置区自动 reload 新项目 |
 | Skills 路径 | 自定义 skills 根目录；空 = 走 marketplace 默认。填了则 session 启动时 overlay-sync 进项目 `.claude/skills/`(CC)或 `.opencode/skills/`(opencode)，worker 原生发现；只写这两个目录、不碰 `settings.json` |
 | Agents 路径 | 自定义 agents 根目录；空 = 默认。同上，sync 进 `.claude/agents/`(CC)或 `.opencode/agents/`(opencode) |
-| Hook 服务器 · 启用 / 端口 / 主机 | Claude CLI 通过此通道发送 Stop 和工具提问回调。默认端口为 `18765`。取消勾选「启用」并保存后，下次启动跳过监听 |
+| Hook 服务器 · 启用 / 主机 | Claude CLI 通过此通道发送 Stop 和工具提问回调。取消勾选「启用」并保存后，下次启动跳过监听。端口不属于 YAML 或 Settings，只能通过启动参数 `--hook-port` 指定，默认 `18765` |
 | 审核 · 超时时间 | reviewer 单次判定的超时（秒）|
 | 审核 · 回复模式 | `auto`（reviewer 自动答门禁 + hook 注入提醒）/ `manual`（reviewer 暂停，你在 Session Detail 输入框回复；**staged 场景下每个阶段完成都会停等你审**，见 [阶段门禁设计](./designs/stage-gating.md) §4.4） |
 
